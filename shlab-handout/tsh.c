@@ -343,10 +343,10 @@ int builtin_cmd(char **argv)
     }
 
     // trace09、trace10 add
-    if (strcmp(argv[0], "bg") == 0 || strcmp(argv[0], "fg") == 0) // judge bg & fg
+    if (strcmp(argv[0], "bg") == 0 || strcmp(argv[0], "fg") == 0)               // 判断是否为 bg 或 fg
     {
         do_bgfg(argv);
-        return 1;
+        return 1;                                                               // 用来告诉`eval`已经找到了一个内置命令
     }
 
     return 0;
@@ -373,35 +373,39 @@ trace10.txt – 处理 fg 内置命令
 */
 void do_bgfg(char **argv)
 {
-    char *id = argv[1], *end; // JID or PID
+    char *id = argv[1], *end;                                                   // *id = JID or PID, *end 指向被转换的最后一个数字的下一个字符
     struct job_t *job;
     int numid;
-    // 检查参数是否存在
-    if (id == NULL) // not specified
+
+    if (id == NULL)                                                             // 检查参数是否存在
     {
         printf("%s command requires PID or %%jobid argument\n", argv[0]);
         return;
     }
 
-    if (id[0] == '%') // this is a job (JID)
+    if (id[0] == '%')                                                           // this is a job (JID)
     {
-        id++;                         // point to the number position
-        numid = strtol(id, &end, 10); // convert id char[] to integer
-        if (*end != '\0')             // contains non-digit characters
+        id++;                                                                   // 将 id 指针自增 1，是为了让指针指向第一个数字
+        numid = strtol(id, &end, 10);                                           // 使用 strtol 功能将其从字符串转为数字。
+        // 在转换的过程中，end 会被设定为指向被转换的最后一个数字的下一个字符。
+        // 正常情况下，JID/PID 并不应该包含除开头 % 号外的字符，所以 end 指向的应该是表示字符串结尾的 \0。
+        if (*end != '\0')
+        // 不能非数字字符（不然 end 将不是指向 \0，而是指向到最后一个不能转换的字符）
         {
             printf("%s: argument must be a PID or %%jobid\n", argv[0]);
             return;
         }
-        job = getjobjid(jobs, numid); // try to get job
-        if (job == NULL)
+        job = getjobjid(jobs, numid);                                           // 获取 job
+        if (job == NULL)                                                        // 检查是否存在
         {
             printf("%%%d: No such job\n", numid);
             return;
         }
     }
-    else // this is a process (PID)
+    else                                                                        // this is a process (PID)
     {
-        numid = strtol(id, &end, 10);
+        // 对于 PID 的情况，不同的地方只在于没有自增，换了适用于 PID 的函数，以及提示信息改变而已。
+        numid = strtol(id, &end, 10);                                           // 同上
         if (*end != '\0')
         {
             printf("%s: argument must be a PID or %%jobid\n", argv[0]);
@@ -414,15 +418,14 @@ void do_bgfg(char **argv)
             return;
         }
     }
-    // 全组发送信号
-    kill(-(job->pid), SIGCONT);
+    kill(-(job->pid), SIGCONT);                                                 // 全组向前台发送信号
     // 根据前台或者后台的要求，做出相应的行为，这与 eval 最后的行为比较类似。
-    if (strcmp(argv[0], "fg") == 0) // foreground
+    if (strcmp(argv[0], "fg") == 0)                                             // bg
     {
         job->state = FG;
         waitfg(job->pid);
     }
-    else // background
+    else                                                                        // fg
     {
         job->state = BG;
         printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);

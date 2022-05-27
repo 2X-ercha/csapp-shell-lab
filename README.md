@@ -358,7 +358,7 @@ void waitfg(pid_t pid)
 
 ![](./img/test5and_fix4.png)
 
-# trace06
+### trace06
 
 > trace06.txt – 将 SIGINT 信号发送到前台任务。
 
@@ -511,3 +511,149 @@ void sigtstp_handler(int sig)
       return;
   }
 ```
+
+### trace09 && trace10
+
+trace09/10
+
+> trace09.txt – 处理 bg 内置命令
+>
+> trace10.txt – 处理 fg 内置命令
+
+`bg`和`fg`命令是由`do_bgfg`函数处理的，我们需要在`builtin_cmd`里添加合适的调用。
+
+```diff
+  int builtin_cmd(char **argv)
+  {
+      if (strcmp(argv[0], "quit") == 0)                                           // 判断是否为 quit 指令
+          exit(0);
+
+      if (strcmp(argv[0], "jobs") == 0)                                           // 判断是否为 jobs
+      {
+          listjobs(jobs);
+          return 1;                                                               // 用来告诉`eval`已经找到了一个内置命令
+      }
++     if (strcmp(argv[0], "bg") == 0 || strcmp(argv[0], "fg") == 0)               // 判断是否为 bg 或 fg
++     {
++         do_bgfg(argv);
++         return 1;                                                               // 用来告诉`eval`已经找到了一个内置命令
++     }
+      return 0;
+  }
+```
+
+`bg`和`fg`命令的参数`<job>`可以是 PID 或者 JID。在 Writeup 的 Specification 一节中，有这样一段话：
+
+> bg <job> 命令通过发送 SIGCONT 指令给工作来使它重新开始，然后让它运行在后台。
+>
+> fg <job> 命令通过发送 SIGCONT 指令给工作来使它重新开始，然后让它运行在前台。
+
+这么一来，用一个函数处理两个命令就显得很合理了。在 do_bgfg 函数中，要获取参数中的`PID`或者`JID`，解析为合适的任务类型指针，并发送`SIGCONT`信号，然后根据前台和后台决定所要做的事情。
+
+```c
+void do_bgfg(char **argv)
+{
+    char *id = argv[1], *end;                                                   // *id = JID or PID, *end 指向被转换的最后一个数字的下一个字符
+    struct job_t *job;
+    int numid;
+
+    if (id == NULL)                                                             // 检查参数是否存在
+    {
+        printf("%s command requires PID or %%jobid argument\n", argv[0]);
+        return;
+    }
+
+    if (id[0] == '%')                                                           // this is a job (JID)
+    {
+        id++;                                                                   // 将 id 指针自增 1，是为了让指针指向第一个数字
+        numid = strtol(id, &end, 10);                                           // 使用 strtol 功能将其从字符串转为数字。
+        // 在转换的过程中，end 会被设定为指向被转换的最后一个数字的下一个字符。
+        // 正常情况下，JID/PID 并不应该包含除开头 % 号外的字符，所以 end 指向的应该是表示字符串结尾的 \0。
+        if (*end != '\0')
+        // 不能非数字字符（不然 end 将不是指向 \0，而是指向到最后一个不能转换的字符）
+        {
+            printf("%s: argument must be a PID or %%jobid\n", argv[0]);
+            return;
+        }
+        job = getjobjid(jobs, numid);                                           // 获取 job
+        if (job == NULL)                                                        // 检查是否存在
+        {
+            printf("%%%d: No such job\n", numid);
+            return;
+        }
+    }
+    else                                                                        // this is a process (PID)
+    {
+        // 对于 PID 的情况，不同的地方只在于没有自增，换了适用于 PID 的函数，以及提示信息改变而已。
+        numid = strtol(id, &end, 10);                                           // 同上
+        if (*end != '\0')
+        {
+            printf("%s: argument must be a PID or %%jobid\n", argv[0]);
+            return;
+        }
+        job = getjobpid(jobs, numid); // try to get proc
+        if (job == NULL)
+        {
+            printf("(%d): No such process\n", atoi(id));
+            return;
+        }
+    }
+    kill(-(job->pid), SIGCONT);                                                 // 全组向前台发送信号
+    // 根据前台或者后台的要求，做出相应的行为，这与 eval 最后的行为比较类似。
+    if (strcmp(argv[0], "fg") == 0)                                             // bg
+    {
+        job->state = FG;
+        waitfg(job->pid);
+    }
+    else                                                                        // fg
+    {
+        job->state = BG;
+        printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+    }
+    return;
+}
+```
+
+我们实现了`bg`和`fg`内置命令的处理。对`trace09`和`trace10`进行测试
+
+![](./img/test9.png)
+
+![](./img/test10.png)
+
+### trace11 - trace13
+
+> trace11.txt – 将 SIGINT 信号发送给前台进程集里的每个进程
+
+> trace12.txt – 将 SIGTSTP 信号发送给前台进程集里的每个进程
+
+> trace13.txt – 将进程集里的每个停止的进程重启
+
+到上一节，我们所写的`Shell`应该也能够完美处理这些测试用例，我们什么都不用做，应该就能看到正确的输出。
+
+这三个指令都调用了`ps`来获取前台进程集信息，这个是动态的过程，输出也可能会有顺序上的不同。所以不太需要计较，大致相同即可。
+
+![](./img/test11.png)
+
+![](./img/test12.png)
+
+![](./img/test13.png)
+
+### trace14
+
+> trace14.txt – 简单的错误处理
+
+前面有关错误的所有输出均来自于这个测试，为了方便前面我就没有再拆开来写。
+
+![](./img/test14.png)
+
+### trace15 && trace16
+
+> trace15.txt – 全都混到一起
+
+> trace16.txt – 测试 shell 是否能够处理来自其他进程（而不是终端）的 SIGTSTP 和 SIGINT 信号
+
+如果前面没有出错的话，这两个测试也可以直接通过。这两个测试更像是为了让我们校验我们在处理后面的样例时是否考虑到了**是否会对前面测试产生影响的问题**，同时检验一些进程的信号能否被正确处理。
+
+![](./img/test15.png)
+
+![](./img/test16.png)
