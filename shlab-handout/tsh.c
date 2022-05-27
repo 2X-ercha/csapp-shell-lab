@@ -390,6 +390,9 @@ trace05.txt – 处理 jobs 内置命令。
 
 trace06.txt – 将 SIGINT 信号发送到前台任务。
   在 tshref 中，终止进程后还会输出一行提示信息，由于这也算是子进程结束了，这部分也是在 sigchld_handler 中处理的。将函数修改为如下的样子即可。
+
+trace08.txt – 将 SIGTSTP 信号只发送给前台任务。
+  注意这里额外地要将工作的状态改为停止（对应上文 addjob 说明处的三种状态类型）
 */
 void sigchld_handler(int sig)
 {
@@ -410,6 +413,14 @@ void sigchld_handler(int sig)
             printf("Job [%d] (%d) terminated by signal %d\n", pid2jid(pid), pid, WTERMSIG(status));
 
             deletejob(jobs,pid); // remove pid from job list
+        }
+
+        // trace08 add
+        if (WIFSTOPPED(status)) // SIGTSTP, etc.
+        {
+            printf("Job [%d] (%d) stopped by signal %d\n", pid2jid(pid), pid, WSTOPSIG(status));
+            struct job_t *job = getjobpid(jobs, pid);
+            job->state = ST;
         }
     }
 
@@ -457,8 +468,20 @@ void sigint_handler(int sig)
  *     the user types ctrl-z at the keyboard. Catch it and suspend the
  *     foreground job by sending it a SIGTSTP.
  */
+/*
+trace08.txt – 将 SIGTSTP 信号只发送给前台任务。
+  SIGTSTP 对应的是 Ctrl+Z。实现方法很像上两个 trace 的方法，只需改 sigtstp_handler 和 sigchld_handler 就行了。
+*/
 void sigtstp_handler(int sig)
 {
+    pid_t pid = fgpid(jobs);
+    if (pid != 0)
+    {
+        if (kill(-pid, SIGTSTP) < 0)
+        {
+            unix_error("sigtstp error");
+        }
+    }
     return;
 }
 
