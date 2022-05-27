@@ -169,6 +169,14 @@ eval 函数是根据输入命令行进行对应操作的函数。在 CSAPP 2e 8.
 trace01 只需要正确响应 EOF 就可以了。在课本的程序框架中，已经使用 parseline 函数将命令行解析为了参数，并判断了第一个参数是否为 NULL。
 
 显然，第一个参数是 NULL，后面当然更是 NULL，意味着没有输入。也就是说，我们什么额外的工作都不用干……
+
+trace03.txt – 运行一个前台任务。
+trace04.txt – 运行一个后台任务。
+在课本的 eval 框架中，首先使用 builtin_cmd 判断并处理内置函数，然后根据 bg 值（由 parseline 得到）判断是否在后台运行。
+这其中会先 fork 出一个子进程，然后使用 execve 执行目标程序。
+请注意，只有子进程会在运行失败时 exit。根据是否是前台任务，判断是直接打印执行详情还是等待前台进程结束。
+
+所以还是啥都不用干。。。(job不一致，trace05解决)
 */
 void eval(char *cmdline)
 {
@@ -205,7 +213,7 @@ void eval(char *cmdline)
         }
         else
         {
-            printf("%d %s", pid, cmdline);
+            printf("[%d] (%d) %s", pid2jid(pid), pid, cmdline);
         }
     }
     return;
@@ -229,41 +237,42 @@ int parseline(const char *cmdline, char **argv)
     strcpy(buf, cmdline);
     buf[strlen(buf)-1] = ' ';  /* replace trailing '\n' with space */
     while (*buf && (*buf == ' ')) /* ignore leading spaces */
-	buf++;
+        buf++;
 
     /* Build the argv list */
     argc = 0;
     if (*buf == '\'') {
-	buf++;
-	delim = strchr(buf, '\'');
+	      buf++;
+	      delim = strchr(buf, '\'');
     }
-    else {
-	delim = strchr(buf, ' ');
+    else
+    {
+	      delim = strchr(buf, ' ');
     }
 
-    while (delim) {
-	argv[argc++] = buf;
-	*delim = '\0';
-	buf = delim + 1;
-	while (*buf && (*buf == ' ')) /* ignore spaces */
-	       buf++;
-
-	if (*buf == '\'') {
-	    buf++;
-	    delim = strchr(buf, '\'');
-	}
-	else {
-	    delim = strchr(buf, ' ');
-	}
+    while (delim)
+    {
+	      argv[argc++] = buf;
+	      *delim = '\0';
+	      buf = delim + 1;
+    	  while (*buf && (*buf == ' ')) /* ignore spaces */
+    	       buf++;
+    	  if (*buf == '\'') {
+    	       buf++;
+    	       delim = strchr(buf, '\'');
+    	  }
+        else {
+    	       delim = strchr(buf, ' ');
+    	  }
     }
     argv[argc] = NULL;
 
     if (argc == 0)  /* ignore blank line */
-	return 1;
+        return 1;
 
     /* should the job run in the background? */
     if ((bg = (*argv[argc-1] == '&')) != 0) {
-	argv[--argc] = NULL;
+        argv[--argc] = NULL;
     }
     return bg;
 }
@@ -272,9 +281,15 @@ int parseline(const char *cmdline, char **argv)
  * builtin_cmd - If the user has typed a built-in command then execute
  *    it immediately.
  */
+/*
+trace02.txt – 处理内置的 quit 命令。
+在 tsh 中，内置的命令实在 builtin_cmd 函数中处理的。只需要在其中判断一下第一个参数是否为 quit，如果是的话退出即可。
+*/
 int builtin_cmd(char **argv)
 {
-    return 0;     /* not a builtin command */
+    if (strcmp(argv[0], "quit") == 0) // process quit command
+      exit(0);
+    return 0;
 }
 
 /*
