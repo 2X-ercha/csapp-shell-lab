@@ -195,62 +195,61 @@ trace06.txt – 将 SIGINT 信号发送到前台任务。
 */
 void eval(char *cmdline)
 {
-    char *argv[MAXARGS];
-    char buf[MAXLINE]; // command will be parsed and modified?
-    int bg;            // whether it runs in background
-    pid_t pid;
+    char *argv[MAXARGS];                                                        // 参数列表
+    char buf[MAXLINE];                                                          // 保存修改的命令行
+    int bg;                                                                     // 用于记录是否为后台进程
+    pid_t pid;                                                                  // 进程pid
 
     // trace05 add
     sigset_t mask;
     sigemptyset(&mask);
 
-    // preprocess cmd line
     strcpy(buf, cmdline);
-    bg = parseline(buf, argv); // convert the command into argv
-    if (argv[0] == NULL)       // the line is empty, return
+    bg = parseline(buf, argv);                                                  // 提取参数列表
+    if (argv[0] == NULL)                                                        // 忽略空命令
     {
         return;
     }
-    // run external command
-    if (!builtin_cmd(argv))
+
+    if (!builtin_cmd(argv))                                                     // 判断是否为内置命令
     {
         // trace05 add
         sigaddset(&mask, SIGCHLD);
-        sigprocmask(SIG_BLOCK, &mask, NULL); // 阻断 SIGCHLD 信号
+        sigprocmask(SIG_BLOCK, &mask, NULL);                                    // 判断不是内置命令之后，阻断 SIGCHLD 信号
 
-        if ((pid = fork()) == 0) // this is child
+        if ((pid = fork()) == 0)                                                // 子程序运行用户作业
         {
             // trace05 add
-            sigprocmask(SIG_UNBLOCK, &mask, NULL); // 恢复信号
+            sigprocmask(SIG_UNBLOCK, &mask, NULL);                              // 在子进程 execve 之前，恢复信号
 
             // trace06 add
             setpgid(0, 0); // 两个 0 分别代表要加入的是当前进程（原本前台的shell），以及新建一个 GID=PID 的组。
 
-            if (execve(argv[0], argv, environ) < 0) // execute command failed
+            if (execve(argv[0], argv, environ) < 0)                             // 若无法查到路径下可执行文件，则报错并退出
             {
                 printf("%s: Command not found\n", argv[0]);
                 exit(0); // here only child exited
             }
         }
-        addjob(jobs, pid, bg ? BG : FG, cmdline); // add the job to job list.
+        addjob(jobs, pid, bg ? BG : FG, cmdline);                               // 添加job到列表中
+        // 代码的 addjob 中第三个参数 state 有三个取值，FG=1、BG=2、ST=3。虽然直接使用 bg+1 也是可行的方案，但这样使用三元运算符会更优雅更容易理解。
 
         // trace05 add
-        sigprocmask(SIG_UNBLOCK, &mask, NULL); // 父进程 addjob 完毕后也要恢复
+        sigprocmask(SIG_UNBLOCK, &mask, NULL);                                  // 父进程 addjob 完毕后也要恢复
 
-        // 代码的 addjob 中第三个参数 state 有三个取值，FG=1、BG=2、ST=3。虽然直接使用 bg+1 也是可行的方案，但这样使用三元运算符会更优雅更容易理解。
-        if (!bg) // run the process in foreground:
+        if (!bg)                                                                // 如果不是后台进程
         // wait for foreground job to terminate
         {
-            waitfg(pid); // the waiting stuff should be done in `waitfg`
+            waitfg(pid);                                                        // 等待前台进程
             /* trace05 修改
             int status;
-            if (waitpid(pid, &status, 0) < 0) // if return -1, then waiting failed
+            if (waitpid(pid, &status, 0) < 0)                                   // 等待前台进程
             {
                 unix_error("waitfg: waitpid error");
             }
             */
         }
-        else
+        else                                                                    // 如果前台则立即执行
         {
             printf("[%d] (%d) %s", pid2jid(pid), pid, cmdline);
         }
@@ -334,14 +333,13 @@ trace10.txt – 处理 fg 内置命令
 */
 int builtin_cmd(char **argv)
 {
-    if (strcmp(argv[0], "quit") == 0) // process quit command
-      exit(0);
+    if (strcmp(argv[0], "quit") == 0)                                           // 判断是否为 quit 指令
+        exit(0);
 
-    // trace05 add
-    if (strcmp(argv[0], "jobs") == 0)
+    if (strcmp(argv[0], "jobs") == 0)                                           // 判断是否为 jobs
     {
         listjobs(jobs);
-        return 1; // this IS a builtin command, return 1 to notify
+        return 1;                                                               // 用来告诉`eval`已经找到了一个内置命令
     }
 
     // trace09、trace10 add
@@ -480,20 +478,17 @@ void sigchld_handler(int sig)
 {
     pid_t pid;
     int status;
-    while((pid=waitpid(-1,&status,WNOHANG|WUNTRACED))>0) // check if a child has become zombie, without wait
+    while((pid=waitpid(-1,&status,WNOHANG|WUNTRACED))>0)                        // 如果子进程是僵尸进程，则无需等待
     {
-        // trace06 add
         if(WIFEXITED(status))
         {
-            deletejob(jobs,pid); // remove pid from job list
+            deletejob(jobs,pid);                                                // 删除 job
         }
 
-        // if(WIFEXITED(status))
+        // trace06 add
         if(WIFSIGNALED(status))
         {
-            // trace06 add
             printf("Job [%d] (%d) terminated by signal %d\n", pid2jid(pid), pid, WTERMSIG(status));
-
             deletejob(jobs,pid); // remove pid from job list
         }
 
@@ -566,6 +561,15 @@ void sigtstp_handler(int sig)
     }
     return;
 }
+
+/*
+trace11.txt – 将 SIGINT 信号发送给前台进程集里的每个进程
+trace12.txt – 将 SIGTSTP 信号发送给前台进程集里的每个进程
+trace13.txt – 将进程集里的每个停止的进程重启
+trace14.txt – 简单的错误处理
+trace15.txt – 全都混到一起
+trace16.txt – 测试 shell 是否能够处理来自其他进程（而不是终端）的 SIGTSTP 和 SIGINT 信号
+*/
 
 /*********************
  * End signal handlers
