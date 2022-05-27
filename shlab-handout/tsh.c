@@ -223,7 +223,7 @@ void eval(char *cmdline)
             sigprocmask(SIG_UNBLOCK, &mask, NULL);                              // 在子进程 execve 之前，恢复信号
 
             // trace06 add
-            setpgid(0, 0); // 两个 0 分别代表要加入的是当前进程（原本前台的shell），以及新建一个 GID=PID 的组。
+            setpgid(0, 0);                                                      // 防止^C将其退出（直接与 Unix shell 绑定）
 
             if (execve(argv[0], argv, environ) < 0)                             // 若无法查到路径下可执行文件，则报错并退出
             {
@@ -497,7 +497,7 @@ void sigchld_handler(int sig)
         {
             printf("Job [%d] (%d) stopped by signal %d\n", pid2jid(pid), pid, WSTOPSIG(status));
             struct job_t *job = getjobpid(jobs, pid);
-            job->state = ST;
+            job->state = ST;                                                    // 将工作的状态改为停止
         }
     }
 
@@ -526,16 +526,16 @@ trace07.txt – 将 SIGINT 信号只发送到前台任务。
 */
 void sigint_handler(int sig)
 {
-    pid_t pid = fgpid(jobs);    // get pid of foreground job
+    pid_t pid = fgpid(jobs);                                                    // 获取前台进程pid
 
     // trace07 add
-    if (pid != 0) // if no foreground job (PID=0), do nothing (ONLY send to foreground)
+    if (pid != 0)                                                               // 防止无前台时tsh被干掉
 
     {
-      if (kill(-pid, SIGINT) < 0) // try to send SIGINT
-      {
-          unix_error("sigint error"); // failed
-      }
+        if (kill(-pid, SIGINT) < 0)                                             // 尝试将整个进程组终止
+        {
+            unix_error("sigint error");
+        }
     }
     return;
 }

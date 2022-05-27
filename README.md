@@ -153,7 +153,7 @@ void eval(char *cmdline)
 
 ![](./img/test1.png)
 
-## trace02
+### trace02
 
 > trace02.txt – 处理内置的 quit 命令。
 
@@ -173,7 +173,7 @@ int builtin_cmd(char **argv)
 
 ![](./img/test2.png)
 
-## trace03 && trace04
+### trace03 && trace04
 
 > trace03.txt – 运行一个前台任务。
 >
@@ -185,7 +185,7 @@ int builtin_cmd(char **argv)
 
 ![](./img/test3and4.png)
 
-## trace05
+### trace05
 
 > trace05.txt – 处理 jobs 内置命令。
 
@@ -354,6 +354,160 @@ void waitfg(pid_t pid)
   }
 ```
 
-这样就可以通过 trace05 的测试了
+这样就可以通过`trace05`的测试了
 
 ![](./img/test5and_fix4.png)
+
+# trace06
+
+> trace06.txt – 将 SIGINT 信号发送到前台任务。
+
+这个`trace`解决起来比较简单。首先，我们需要实现`SIGINT`信号的处理例程。这里使用`-pid`是为了将整个进程组的进程全部干掉。
+
+```c
+void sigint_handler(int sig)
+{
+    pid_t pid = fgpid(jobs);                                                    // 获取前台进程pid
+    if (kill(-pid, SIGINT) < 0)                                                 // 尝试将整个进程组终止
+    {
+        unix_error("sigint error");
+    }
+    return;
+}
+```
+
+在`tshref`中，终止进程后还会输出一行提示信息，由于这也算是子进程结束了，这部分也是在`sigchld_handler`中处理的。
+
+```diff
+  void sigchld_handler(int sig)
+  {
+      pid_t pid;
+      int status;
+      while((pid=waitpid(-1,&status,WNOHANG|WUNTRACED))>0)                        // 如果子进程是僵尸进程，则无需等待
+      {
+          if(WIFEXITED(status))
+          {
+              deletejob(jobs,pid);                                                // 删除 job
+          }
++         if(WIFSIGNALED(status))
++         {
++             printf("Job [%d] (%d) terminated by signal %d\n", pid2jid(pid), pid, WTERMSIG(status));
++             deletejob(jobs,pid);
++         }
+      }
++     if (pid < 0 && errno != ECHILD)
++     {
++         unix_error("waitpid error");
++     }
+      return;
+  }
+```
+
+这里还有一个坑，在 Writeup 中已经提到。
+
+> 当你在标准`Unix shell`中运行你的`shell`时，你的`shell`处于前台进程组。如果你的`shell`创建一个子进程，那么它默认也会被加到前台进程组内。因为输入`Ctrl+C`会向前台进程组的所有进程发送`SIGINT`信号，所以你输入`Ctrl+C`也会向你的`shell`和你创建的子进程发送`SIGINT`，这显然不对。
+>
+> 这里有个解决办法：在`fork`之后，`execve`之前，子进程应该调用`setpgid(0, 0)`，来将子进程放置到一个新的进程组内，组`ID`与子进程`PID`相同。这确保了只会有一个进程 —— 即你的`shell`—— 处于前台进程组内。当你按下`Ctrl+C`，`shell`应该捕获`SIGINT`信号，然后将其传递到正确的前台应用（或更准确地，包含前台进程的进程组）。
+
+简单的说，就是我们使用`Ctrl+C`结束`tsh`中运行的前台进程，会把处于`Unix shell`前台进程中的`tsh`一起干掉。按照 Writeup 的解决办法，在`execve`之前设置进程组。两个`0`分别代表要加入的是当前进程，以及新建一个`GID=PID`的组。此时`tsh`与`Unix shell`直接绑定，只有`tsh`内部的`exit(0)`或者`Ctrl+C`时没有前台才能使其在`Unix shell`中退出
+
+```diff
+  // eval()
+
+          if ((pid = fork()) == 0)                                                // 子程序运行用户作业
+          {
+              sigprocmask(SIG_UNBLOCK, &mask, NULL);                              // 在子进程 execve 之前，恢复信号
++             setpgid(0, 0);                                                      // 防止^C将其退出（直接与 Unix shell 绑定）
+              if (execve(argv[0], argv, environ) < 0)                             // 若无法查到路径下可执行文件，则报错并退出
+              {
+                  printf("%s: Command not found\n", argv[0]);
+                  exit(0); // here only child exited
+              }
+          }
+```
+
+运行测试`trace06`，能够顺利通过测试。结果如下
+
+![](./img/test6.png)
+
+### trace07
+
+> trace07.txt – 将 SIGINT 信号只发送到前台任务。
+
+其实单论测试的话，测试`trace06`的代码现在也可以直接用。但测试用例没有测试没有前台任务的情况，为了让程序更完善，还是要做一处修改。
+
+在`sigint_handler`中。需要判断是否存在前台任务，如果没有，就不需要做任何事。这样，在什么都没运行的时候按下`Ctrl+C`，`tsh`就不会直接挂掉，什么都输不进去。在没有前台任务的情况下，`fgpid`会返回`0`，我们可以利用这个特性修改`sigint_handler`函数。
+
+```diff
+  // sigint_handler()
+  void sigint_handler(int sig)
+  {
+      pid_t pid = fgpid(jobs);                                                    // 获取前台进程pid
++     if (pid != 0)                                                               // 防止无前台时tsh被干掉
++     {
+          if (kill(-pid, SIGINT) < 0)                                             // 尝试将整个进程组终止
+          {
+              unix_error("sigint error");
+          }
++     }
+      return;
+  }
+```
+
+显然能够通过`trace07`测试。
+
+![](./img/test7.png)
+
+### trace08
+
+> trace08.txt – 将 SIGTSTP 信号只发送给前台任务。
+
+`SIGTSTP`对应的是`Ctrl+Z`。实现方法很像解决上两个`trace`的方法，只需改`sigtstp_handler`和`sigchld_handler`就行了。
+
+```c
+void sigtstp_handler(int sig)
+{
+    pid_t pid = fgpid(jobs);
+    if (pid != 0)
+    {
+        if (kill(-pid, SIGTSTP) < 0)
+        {
+            unix_error("sigtstp error");
+        }
+    }
+    return;
+}
+```
+
+然后是`sigchld_handler`。注意这里额外地要将工作的状态改为停止（对应上文`addjob`说明处的三种状态类型）：
+
+```diff
+  void sigchld_handler(int sig)
+  {
+      pid_t pid;
+      int status;
+      while((pid=waitpid(-1,&status,WNOHANG|WUNTRACED))>0)                        // 如果子进程是僵尸进程，则无需等待
+      {
+          if(WIFEXITED(status))
+          {
+              deletejob(jobs,pid);                                                // 删除 job
+          }
+          if(WIFSIGNALED(status))
+          {
+              printf("Job [%d] (%d) terminated by signal %d\n", pid2jid(pid), pid, WTERMSIG(status));
+              deletejob(jobs,pid); // remove pid from job list
+          }
++         if (WIFSTOPPED(status)) // SIGTSTP, etc.
++         {
++             printf("Job [%d] (%d) stopped by signal %d\n", pid2jid(pid), pid, WSTOPSIG(status));
++             struct job_t *job = getjobpid(jobs, pid);
++             job->state = ST;                                                    // 将工作的状态改为停止
++         }
+      }
+      if (pid < 0 && errno != ECHILD)
+      {
+          unix_error("waitpid error");
+      }
+      return;
+  }
+```
