@@ -179,12 +179,19 @@ trace04.txt – 运行一个后台任务。
   所以还是啥都不用干。。。(job不一致，trace05解决)
 
 trace05.txt – 处理 jobs 内置命令。
-运行 jobs 都不会输出任何东西。毕竟在我们已有的代码里，既没有在任务开始时将其添加到任务列表，也没有在结束时将它移出。
-要做到将任务添加到任务列表，需要在 fork 后调用 addjob
-如果当前任务需要在前台运行，需要等待前台任务（如果有）结束，但 tsh 有一个 waitfg 函数，看起来他们不想让我们把等待工作放到 eval 中。
-另外还要处理 eval 中的信号问题。Writeup 中提到
-  > 在 eval 中，父进程在 fork 子进程之前，必须使用 sigprocmask 函数来阻断 SIGCHLD 信号，然后在使用 addjob 将子进程加入任务列表之后，再调用 sigprocmask 恢复 SIGCHLD 信号。因为子进程继承了父进程的中断向量，所以子进程必须在它执行新程序之前将 SIGCHILD 恢复。
-  > 父进程这样将 SIGCHLD 信号阻断，是为了避免子进程被 SIGCHLD 处理程序回收（然后被从任务列表中移除），之后父进程调用 addjob 时的竞态条件。
+  运行 jobs 都不会输出任何东西。毕竟在我们已有的代码里，既没有在任务开始时将其添加到任务列表，也没有在结束时将它移出。
+  要做到将任务添加到任务列表，需要在 fork 后调用 addjob
+  如果当前任务需要在前台运行，需要等待前台任务（如果有）结束，但 tsh 有一个 waitfg 函数，看起来他们不想让我们把等待工作放到 eval 中。
+  另外还要处理 eval 中的信号问题。Writeup 中提到
+    > 在 eval 中，父进程在 fork 子进程之前，必须使用 sigprocmask 函数来阻断 SIGCHLD 信号，然后在使用 addjob 将子进程加入任务列表之后，再调用 sigprocmask 恢复 SIGCHLD 信号。因为子进程继承了父进程的中断向量，所以子进程必须在它执行新程序之前将 SIGCHILD 恢复。
+    > 父进程这样将 SIGCHLD 信号阻断，是为了避免子进程被 SIGCHLD 处理程序回收（然后被从任务列表中移除），之后父进程调用 addjob 时的竞态条件。
+
+trace06.txt – 将 SIGINT 信号发送到前台任务。
+  还有一个坑，在 Writeup 中已经提到。
+    > 当你在标准 Unix shell 中运行你的 shell 时，你的 shell 处于前台进程组。如果你的 shell 创建一个子进程，那么它默认也会被加到前台进程组内。因为输入 Ctrl+C 会向前台进程组的所有进程发送 SIGINT 信号，所以你输入 Ctrl+C 也会向你的 shell 和你创建的子进程发送 SIGINT，这显然不对。
+    > 这里有个解决办法：在 fork 之后，execve 之前，子进程应该调用 setpgid(0, 0)，来将子进程放置到一个新的进程组内，组 ID 与子进程 PID 相同。这确保了只会有一个进程 —— 即你的 shell—— 处于前台进程组内。当你按下 Ctrl+C，shell 应该捕获 SIGINT 信号，然后将其传递到正确的前台应用（或更准确地，包含前台进程的进程组）。0
+  长话短说，就是使用 Ctrl+C 结束 tsh 中运行的前台进程，会把 shell 一起干掉。
+  解决办法就是在 execve 之前设置进程组。两个 0 分别代表要加入的是当前进程，以及新建一个 GID=PID 的组。
 */
 void eval(char *cmdline)
 {
@@ -215,6 +222,9 @@ void eval(char *cmdline)
         {
             // trace05 add
             sigprocmask(SIG_UNBLOCK, &mask, NULL); // 恢复信号
+
+            // trace06 add
+            setpgid(0, 0); // 两个 0 分别代表要加入的是当前进程（原本前台的shell），以及新建一个 GID=PID 的组。
 
             if (execve(argv[0], argv, environ) < 0) // execute command failed
             {
@@ -312,11 +322,11 @@ int parseline(const char *cmdline, char **argv)
  */
 /*
 trace02.txt – 处理内置的 quit 命令。
-在 tsh 中，内置的命令实在 builtin_cmd 函数中处理的。只需要在其中判断一下第一个参数是否为 quit，如果是的话退出即可。
+  在 tsh 中，内置的命令实在 builtin_cmd 函数中处理的。只需要在其中判断一下第一个参数是否为 quit，如果是的话退出即可。
 
-trace05.txt – 处理 jobs 内置命令。
-将处理 jobs 命令的地方做好。tsh 已经为我们实现了 listjobs 函数，可以直接放到 builtin_cmd 中。
-注意 return 1 用来告诉 eval 已经找到了一个内置命令，否则会提示 “command not found”。
+  trace05.txt – 处理 jobs 内置命令。
+  将处理 jobs 命令的地方做好。tsh 已经为我们实现了 listjobs 函数，可以直接放到 builtin_cmd 中。
+  注意 return 1 用来告诉 eval 已经找到了一个内置命令，否则会提示 “command not found”。
 */
 int builtin_cmd(char **argv)
 {
@@ -345,10 +355,10 @@ void do_bgfg(char **argv)
  */
 /*
 trace05.txt – 处理 jobs 内置命令。
-Writeup 提示
-  > 实验有一个棘手的部分，是决定 waitfg 和 sigchld 处理函数之间的工作分配。我们推荐以下方法：
-  > – 在 waitfg 中，用一个死循环包裹 sleep 函数。
-  > – 在 sigchild_handler 中，调用且仅调用一次 waitpid。
+  Writeup 提示
+    > 实验有一个棘手的部分，是决定 waitfg 和 sigchld 处理函数之间的工作分配。我们推荐以下方法：
+    > – 在 waitfg 中，用一个死循环包裹 sleep 函数。
+    > – 在 sigchild_handler 中，调用且仅调用一次 waitpid。
 */
 void waitfg(pid_t pid)
 {
@@ -372,11 +382,14 @@ void waitfg(pid_t pid)
  */
 /*
 trace05.txt – 处理 jobs 内置命令。
-涉及到对 waitpid 函数的更深入理解，在 CSAPP 8.4.3 节（中文版 P496，英文版 P724），提到了这样一段话，介绍了 waitpid 函数的默认行为，以及退出状态的检查方法
-  > （更改默认行为）WNOHANG|WUNTRACED：立即返回。如果等待集里面没有子进程已经终止，那么返回 0；否则，返回其中一个已终止子进程的 PID。
-  > （检查回收子进程的返回状态）WIFEXITED(status)：如果子进程正常退出，即通过调用 exit 或者 return，则返回真。
-Writeup 中也提到 WNOHANG|WUNTRACED 或许会有用。
-前一个更改默认行为的部分对应了 waitpid 的第三个参数，后一个检查用于确定是否有个子进程真的退出了（而非没有子进程终止，waitpid 返回了 0）
+  涉及到对 waitpid 函数的更深入理解，在 CSAPP 8.4.3 节（中文版 P496，英文版 P724），提到了这样一段话，介绍了 waitpid 函数的默认行为，以及退出状态的检查方法
+    > （更改默认行为）WNOHANG|WUNTRACED：立即返回。如果等待集里面没有子进程已经终止，那么返回 0；否则，返回其中一个已终止子进程的 PID。
+    > （检查回收子进程的返回状态）WIFEXITED(status)：如果子进程正常退出，即通过调用 exit 或者 return，则返回真。
+  Writeup 中也提到 WNOHANG|WUNTRACED 或许会有用。
+  前一个更改默认行为的部分对应了 waitpid 的第三个参数，后一个检查用于确定是否有个子进程真的退出了（而非没有子进程终止，waitpid 返回了 0）
+
+trace06.txt – 将 SIGINT 信号发送到前台任务。
+  在 tshref 中，终止进程后还会输出一行提示信息，由于这也算是子进程结束了，这部分也是在 sigchld_handler 中处理的。将函数修改为如下的样子即可。
 */
 void sigchld_handler(int sig)
 {
@@ -384,11 +397,28 @@ void sigchld_handler(int sig)
     int status;
     while((pid=waitpid(-1,&status,WNOHANG|WUNTRACED))>0) // check if a child has become zombie, without wait
     {
+        // trace06 add
         if(WIFEXITED(status))
         {
             deletejob(jobs,pid); // remove pid from job list
         }
+
+        // if(WIFEXITED(status))
+        if(WIFSIGNALED(status))
+        {
+            // trace06 add
+            printf("Job [%d] (%d) terminated by signal %d\n", pid2jid(pid), pid, WTERMSIG(status));
+
+            deletejob(jobs,pid); // remove pid from job list
+        }
     }
+
+    // trace06 add
+    if (pid < 0 && errno != ECHILD)
+    {
+        unix_error("waitpid error");
+    }
+
     return;
 }
 
@@ -397,8 +427,17 @@ void sigchld_handler(int sig)
  *    user types ctrl-c at the keyboard.  Catch it and send it along
  *    to the foreground job.
  */
+/*
+trace06.txt – 将 SIGINT 信号发送到前台任务。
+  我们需要实现 SIGINT 信号的处理例程。这里使用 -pid 是为了将整个进程组的进程全部干掉。
+*/
 void sigint_handler(int sig)
 {
+    pid_t pid = fgpid(jobs);    // get pid of foreground job
+    if (kill(-pid, SIGINT) < 0) // try to send SIGINT
+    {
+        unix_error("sigint error"); // failed
+    }
     return;
 }
 
