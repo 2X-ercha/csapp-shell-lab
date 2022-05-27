@@ -172,6 +172,42 @@ trace01 只需要正确响应 EOF 就可以了。在课本的程序框架中，�
 */
 void eval(char *cmdline)
 {
+    char *argv[MAXARGS];
+    char buf[MAXLINE]; // command will be parsed and modified?
+    int bg;            // whether it runs in background
+    pid_t pid;
+    // preprocess cmd line
+    strcpy(buf, cmdline);
+    bg = parseline(buf, argv); // convert the command into argv
+    if (argv[0] == NULL)       // the line is empty, return
+    {
+        return;
+    }
+    // run external command
+    if (!builtin_cmd(argv))
+    {
+        if ((pid = fork()) == 0) // this is child
+        {
+            if (execve(argv[0], argv, environ) < 0) // execute command failed
+            {
+                printf("%s: Command not found\n", argv[0]);
+                exit(0); // here only child exited
+            }
+        }
+        if (!bg) // run the process in foreground:
+        // wait for foreground job to terminate
+        {
+            int status;
+            if (waitpid(pid, &status, 0) < 0) // if return -1, then waiting failed
+            {
+                unix_error("waitfg: waitpid error");
+            }
+        }
+        else
+        {
+            printf("%d %s", pid, cmdline);
+        }
+    }
     return;
 }
 
