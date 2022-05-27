@@ -324,19 +324,31 @@ int parseline(const char *cmdline, char **argv)
 trace02.txt – 处理内置的 quit 命令。
   在 tsh 中，内置的命令实在 builtin_cmd 函数中处理的。只需要在其中判断一下第一个参数是否为 quit，如果是的话退出即可。
 
-  trace05.txt – 处理 jobs 内置命令。
+trace05.txt – 处理 jobs 内置命令。
   将处理 jobs 命令的地方做好。tsh 已经为我们实现了 listjobs 函数，可以直接放到 builtin_cmd 中。
   注意 return 1 用来告诉 eval 已经找到了一个内置命令，否则会提示 “command not found”。
+
+trace09.txt – 处理 bg 内置命令
+trace10.txt – 处理 fg 内置命令
+  bg 和 fg 命令是由 do_bgfg 函数处理的，我们需要在 builtin_cmd 里添加合适的调用。
 */
 int builtin_cmd(char **argv)
 {
     if (strcmp(argv[0], "quit") == 0) // process quit command
       exit(0);
 
-    if (strcmp(argv[0], "jobs") == 0) // t5: process jobs command
+    // trace05 add
+    if (strcmp(argv[0], "jobs") == 0)
     {
         listjobs(jobs);
         return 1; // this IS a builtin command, return 1 to notify
+    }
+
+    // trace09、trace10 add
+    if (strcmp(argv[0], "bg") == 0 || strcmp(argv[0], "fg") == 0) // judge bg & fg
+    {
+        do_bgfg(argv);
+        return 1;
     }
 
     return 0;
@@ -345,8 +357,78 @@ int builtin_cmd(char **argv)
 /*
  * do_bgfg - Execute the builtin bg and fg commands
  */
+/*
+trace09.txt – 处理 bg 内置命令
+trace10.txt – 处理 fg 内置命令
+  bg 和 fg 命令的参数 <job> 可以是 PID 或者 JID。在 Writeup 的 Specification 一节中，有这样一段话：
+  > bg <job> 命令通过发送 SIGCONT 指令给工作来使它重新开始，然后让它运行在后台。
+  > fg <job> 命令通过发送 SIGCONT 指令给工作来使它重新开始，然后让它运行在前台。
+  这么一来，用一个函数处理两个命令就显得很合理了。在 do_bgfg 函数中，要获取参数中的 PID 或者 JID，解析为合适的任务类型指针，发送 SIGCONT 信号，然后根据前台和后台决定所要做的事情。
+
+  对 JID 和 PID 的第一、二步处理是不尽相同的，斟酌再三还是分开处理为好。
+
+  * 首先是 JID 的情况。将 id 指针自增 1，是为了让指针指向第一个数字，然后使用 strtol 功能将其从字符串转为数字。
+    在转换的过程中，end 会被设定为指向被转换的最后一个数字的下一个字符。
+    正常情况下，JID/PID 并不应该包含除开头 % 号外的字符，所以 end 指向的应该是表示字符串结尾的 \0。
+    然后就是调用 getjobjid 得到 job 了，再加一个是否存在的判断。
+  * 对于 PID 的情况，不同的地方只在于没有自增，换了适用于 PID 的函数，以及提示信息改变而已。
+*/
 void do_bgfg(char **argv)
 {
+    char *id = argv[1], *end; // JID or PID
+    struct job_t *job;
+    int numid;
+    // 检查参数是否存在
+    if (id == NULL) // not specified
+    {
+        printf("%s command requires PID or %%jobid argument\n", argv[0]);
+        return;
+    }
+
+    if (id[0] == '%') // this is a job (JID)
+    {
+        id++;                         // point to the number position
+        numid = strtol(id, &end, 10); // convert id char[] to integer
+        if (*end != '\0')             // contains non-digit characters
+        {
+            printf("%s: argument must be a PID or %%jobid\n", argv[0]);
+            return;
+        }
+        job = getjobjid(jobs, numid); // try to get job
+        if (job == NULL)
+        {
+            printf("%%%d: No such job\n", numid);
+            return;
+        }
+    }
+    else // this is a process (PID)
+    {
+        numid = strtol(id, &end, 10);
+        if (*end != '\0')
+        {
+            printf("%s: argument must be a PID or %%jobid\n", argv[0]);
+            return;
+        }
+        job = getjobpid(jobs, numid); // try to get proc
+        if (job == NULL)
+        {
+            printf("(%d): No such process\n", atoi(id));
+            return;
+        }
+    }
+    // 全组发送信号
+    kill(-(job->pid), SIGCONT);
+    // 根据前台或者后台的要求，做出相应的行为，这与 eval 最后的行为比较类似。
+    if (strcmp(argv[0], "fg") == 0) // foreground
+    {
+        job->state = FG;
+        waitfg(job->pid);
+    }
+    else // background
+    {
+        job->state = BG;
+        printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+    }
     return;
 }
 
