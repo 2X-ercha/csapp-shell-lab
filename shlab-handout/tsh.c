@@ -430,13 +430,24 @@ void sigchld_handler(int sig)
 /*
 trace06.txt – 将 SIGINT 信号发送到前台任务。
   我们需要实现 SIGINT 信号的处理例程。这里使用 -pid 是为了将整个进程组的进程全部干掉。
+
+trace07.txt – 将 SIGINT 信号只发送到前台任务。
+  其实单论测试的话，上个 trace 的程序现在也可以直接用。但测试用例没有测试没有前台任务的情况，为了让程序更完善，还是要做一处修改。
+  在 sigint_handler 中。需要判断是否存在前台任务，如果没有，就不需要做任何事。
+  这样，在什么都没运行的时候按下 Ctrl+C，tsh 就不会直接挂掉，什么都输不进去。在没有前台任务的情况下，fgpid 会返回 0，我们可以利用这个特性。
 */
 void sigint_handler(int sig)
 {
     pid_t pid = fgpid(jobs);    // get pid of foreground job
-    if (kill(-pid, SIGINT) < 0) // try to send SIGINT
+
+    // trace07 add
+    if (pid != 0) // if no foreground job (PID=0), do nothing (ONLY send to foreground)
+
     {
-        unix_error("sigint error"); // failed
+      if (kill(-pid, SIGINT) < 0) // try to send SIGINT
+      {
+          unix_error("sigint error"); // failed
+      }
     }
     return;
 }
